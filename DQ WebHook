@@ -1,0 +1,291 @@
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage =  game:GetService("ReplicatedStorage")
+
+local player = game:GetService("Players").LocalPlayer
+
+local queue_on_teleport = queue_on_teleport or syn.queue_on_teleport
+
+local WebhookHandler = {
+    webhookUrl = webhookUrl or "https://discord.com/api/webhooks/",
+    pingForRarity = pingForRarity or { },
+    pingUser = pingUser or "", -- userid or everyone
+    pingForItems = pingForItems or { },
+    pingItemsWebhookUrl = pingItemsWebhookUrl or "https://discord.com/api/webhooks/",
+    logPingItems = logPingItems or false,
+    originalPastPingContent = pastPingContent,
+    webhookColor = webhookColor and (typeof(webhookColor) == "number" and webhookColor or tonumber(webhookColor:gsub("#", ""), 16)) or 13959157,
+
+    dungeonNames = {
+        [8376888496] = "Northern Lands",
+        [6878973814] = "Enchanted Forest",
+        [6216785535] = "Aquatic Temple",
+        [5281215714] = "Volcanic Chambers",
+        [4628698373] = "Orbital Outpost",
+        [4113459044] = "Steampunk Sewers",
+        [3737465474] = "Ghastly Harbor",
+        [3488584454] = "The Canals",
+        [3277965370] = "Samurai Palace",
+        [3119903031] = "The Underworld",
+        [3041739550] = "King's Castle",
+        [2988891534] = "Pirate Island",
+        [2743806150] = "Winter Outpost",
+        [2606294912] = "Desert Temple",
+        [4865331948] = "Egg Island",
+        [3220974599] = "Wave Defense",
+        [4286254333] = "Boss Raids"
+    },
+    rarityEmojiMap = {
+        common = ":white_circle:",
+        uncommon = ":green_circle:",
+        rare = ":blue_circle:",
+        epic = ":purple_circle:",
+        legendary = ":orange_circle:",
+        ultimate = ":red_circle:"
+    },
+    description = ("Roblox User: ||[%s](https://www.roblox.com/users/%s/profile)||"):format(player.DisplayName, player.UserId)
+}
+
+do
+    local suffixes = { "K", "M", "B", "T", "Qd", "Qn" }
+    local droppedItems = { }
+
+    function WebhookHandler.getBaseStat(item)
+        local physical, spell = (item:FindFirstChild("physicalPower") or item:FindFirstChild("physicalDamage")).Value, item.spellPower.Value
+        local itemClass = item.Name:find("Guardian") and "Guard" or (math.max(physical, spell) == physical and "Phys" or "Spell")
+
+        return itemClass == "Phys" and physical or itemClass == "Spell" and spell or item.health.Value, itemClass
+    end
+
+    function WebhookHandler.calculatePotential(baseStat, maxUpgrade)
+        return baseStat + maxUpgrade * 10
+    end
+
+    function WebhookHandler.toSuffixString(number)
+        if number == 0 then
+            return "0"
+        end
+
+        local index = math.floor(math.log(number, 1000))
+
+        return ("%.2f"):format(number / math.pow(10, index * 3)):gsub("%.?0+$", "") .. (suffixes[index] or "")
+    end
+
+    function WebhookHandler.convertTime(seconds)
+        return ("%02d:%02d"):format(seconds / 60 % 60, seconds % 60)
+    end
+
+    function WebhookHandler.createWebhookFormat(drops)
+        local dungeonName = WebhookHandler.dungeonNames[game.PlaceId] or "Unknown"
+        local finishTime = workspace:FindFirstChild("timeLeft") and WebhookHandler.convertTime(workspace.timeLeft.Value) or "00:00"
+        local isDaily = game.PlaceId == 2414851778
+        local bonusBossStatus, hardcore = workspace:FindFirstChild("bonusBossStatus"), workspace:FindFirstChild("hardcore")
+
+        if bonusBossStatus and bonusBossStatus.Value == "active" then
+            dungeonName ..= " (Bonus Boss)"
+        end
+
+        if hardcore and hardcore.Value then
+            dungeonName ..= " (Hardcore)"
+        end
+        
+        local accountDetails = {
+            experience = ("%s / %s"):format(WebhookHandler.toSuffixString(player.XP.Value), WebhookHandler.toSuffixString(player.XPNeeded.Value)),
+            level = player.leaderstats.Level.Value,
+            gold = WebhookHandler.toSuffixString(player.leaderstats.Gold.Value)
+        }
+
+        local fields = {
+            {
+                value = ("```\n%s```"):format(dungeonName),
+                name = ":earth_americas: Dungeon",
+                inline = true
+            },
+            {
+                value = ("```\n%s```"):format(finishTime),
+                name = ":alarm_clock: Finish Time",
+                inline = true
+            },
+            {
+                name = ":detective: Account Details",
+                value = ("```ini\n[EXP]: %s\n[Level]: %s\n[Gold]: %s```"):format(accountDetails.experience, accountDetails.level, accountDetails.gold)
+            }
+        }
+
+        if isDaily then
+            table.remove(fields, 1)
+            table.remove(fields, 1)
+        end
+
+        local pingItems = { }
+
+        for _, item in next, drops do
+            local dropData = {
+                inline = true
+            }
+            
+            if item.type.Value == "key" then
+                dropData.name = item.name
+                dropData.value = ("```ini\n[Tier]: %s```"):format(item.tier.Value)
+            else
+                dropData.name = ("%s %s"):format(WebhookHandler.rarityEmojiMap[item.rarity.Value], item.Name)
+
+                local potential
+
+                if item.type.Value == "ability" then
+                    local className = item.description.Value:lower():match("scales with (%l+)")
+
+                    dropData.value = ("```ini\n[Class]: %s\n[Price]: %s```"):format(className and className:gsub("physical", "phys"):gsub("^%l", string.upper) or "Unknown", WebhookHandler.toSuffixString(item.sellPrice.Value))
+                else
+                    local baseStat, className = WebhookHandler.getBaseStat(item)
+                    potential = WebhookHandler.calculatePotential(baseStat, item.maxUpgrades.Value)
+
+                    dropData.value = ("```ini\n[Pot]: %s\n[Class]: %s\n[Price]: %s```"):format(WebhookHandler.toSuffixString(potential), className, WebhookHandler.toSuffixString(item.sellPrice.Value))
+                end
+
+                if table.find(WebhookHandler.pingForRarity, item.rarity.Value) then
+                    table.insert(pingItems, item)
+                else
+                    local pingForItem = WebhookHandler.pingForItems[item.Name]
+
+                    if pingForItem and table.find(pingForItem.rarity, item.rarity.Value) and (not potential or (pingForItem.potential or 0) <= potential) then
+                        table.insert(pingItems, item)
+                    end
+                end
+            end
+            
+            table.insert(fields, dropData)
+        end
+
+        local webhookFormat = {
+            username = "Itzerickx0",
+            content = #pingItems > 0 and (WebhookHandler.pingUser == "everyone" and "@everyone" or ("<@%s>"):format(WebhookHandler.pingUser)) or "",
+            embeds = {
+                {
+                    description = WebhookHandler.description,
+                    footer = {
+                        text = "Itzerickx0"
+                    },
+                    fields = fields,
+                    color = WebhookHandler.webhookColor,
+                    timestamp = DateTime.now():ToIsoDate(),
+                    thumbnail = {
+                        url = "https://i.imgur.com/3aRANij.png"
+                    },
+                    title = isDaily and "**Daily Reward Collected!**" or "**Dungeon Run Completed!**"
+                }
+            },
+            avatar_url = "https://i.imgur.com/3aRANij.png"
+        }
+
+        local pingItemsFields = { }
+        local decodedPastPingContent
+
+        if #pingItems > 0 then
+            if pastPingContent then
+                decodedPastPingContent = HttpService:JSONDecode(pastPingContent)
+                pingItemsFields = decodedPastPingContent.embeds[1].fields
+            end
+
+            for _, item in next, pingItems do
+                local dropData = {
+                    inline = true,
+                    value = WebhookHandler.description .. "\n"
+                }
+
+                if item.type.Value == "key" then
+                    dropData.name = item.name
+                    dropData.value ..= ("```ini\n[Tier]: %s```"):format(item.tier.Value)
+                elseif item.type.Value == "ability" then
+                    local className = item.description.Value:lower():match("scales with (%l+)")
+
+                    dropData.name = ("%s %s"):format(WebhookHandler.rarityEmojiMap[item.rarity.Value], item.Name)
+                    dropData.value ..= ("```ini\n[Class]: %s\n[Price]: %s```"):format(className and className:gsub("physical", "phys"):gsub("^%l", string.upper) or "Unknown", WebhookHandler.toSuffixString(item.sellPrice.Value))
+                else
+                    local baseStat, className = WebhookHandler.getBaseStat(item)
+
+                    dropData.name = ("%s %s"):format(WebhookHandler.rarityEmojiMap[item.rarity.Value], item.Name)
+                    dropData.value ..= ("```ini\n[Pot]: %s\n[Class]: %s\n[Price]: %s```"):format(WebhookHandler.toSuffixString(WebhookHandler.calculatePotential(baseStat, item.maxUpgrades.Value)), className, WebhookHandler.toSuffixString(item.sellPrice.Value))
+                end
+
+                table.insert(pingItemsFields, dropData)
+            end
+
+            if decodedPastPingContent then
+                decodedPastPingContent.embeds[1].fields = pingItemsFields
+            end
+        end
+        
+        local pingWebhookFormat = {
+            username = "Itzerickx0",
+            embeds = {
+                {
+                    footer = {
+                        text = "Itzerickx0"
+                    },
+                    fields = pingItemsFields,
+                    color = WebhookHandler.webhookColor,
+                    timestamp = DateTime.now():ToIsoDate(),
+                    thumbnail = {
+                        url = "https://i.imgur.com/3aRANij.png"
+                    },
+                    title = ("Notable Drops - %s Session"):format(os.date("%X"))
+                }
+            },
+            avatar_url = "https://i.imgur.com/3aRANij.png"
+        }
+
+        return webhookFormat, decodedPastPingContent or pingWebhookFormat, #pingItems > 0
+    end
+    
+    function WebhookHandler.sendItemWebhook(drops)
+        local webhookFormat, pingWebhookFormat, shouldLogPingItems = WebhookHandler.createWebhookFormat(drops)
+
+        syn.request({
+            Url = WebhookHandler.webhookUrl,
+            Method = "POST",
+            Body = HttpService:JSONEncode(webhookFormat),
+            Headers = { ["Content-Type"] = "application/json" }
+        })
+
+        if shouldLogPingItems and logPingItems then
+            if not webhookId then
+                getgenv().webhookId = HttpService:JSONDecode(syn.request({
+                    Url = WebhookHandler.pingItemsWebhookUrl .. "?wait=true",
+                    Method = "POST",
+                    Body = HttpService:JSONEncode(pingWebhookFormat),
+                    Headers = { ["Content-Type"] = "application/json" }
+                }).Body).id
+            else
+                syn.request({
+                    Url = ("%s/messages/%s"):format(WebhookHandler.pingItemsWebhookUrl, webhookId),
+                    Method = "PATCH",
+                    Body = HttpService:JSONEncode(pingWebhookFormat),
+                    Headers = { ["Content-Type"] = "application/json" }
+                })
+            end
+
+            getgenv().pastPingContent = pingWebhookFormat
+        end
+    end
+    
+    ReplicatedStorage:WaitForChild("remotes"):WaitForChild("cloneRewardGui").OnClientEvent:Connect(function(item)
+        if #droppedItems == 0 then
+            task.delay(1, function()
+                WebhookHandler.sendItemWebhook(droppedItems)
+                table.clear(droppedItems)
+            end)
+        end
+        
+        table.insert(droppedItems, item:Clone())
+    end)
+
+    player.OnTeleport:Connect(function()
+        if webhookId and pastPingContent then
+            queue_on_teleport(("getgenv().webhookId = '%s'; getgenv().pastPingContent = [[%s]]"):format(webhookId, pastPingContent ~= WebhookHandler.originalPastPingContent and HttpService:JSONEncode(pastPingContent) or pastPingContent))
+        end
+    end)
+end
