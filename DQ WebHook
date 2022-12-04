@@ -173,7 +173,7 @@ do
                     color = WebhookHandler.webhookColor,
                     timestamp = DateTime.now():ToIsoDate(),
                     thumbnail = {
-                        url = "https://i.imgur.com/3aRANij.png"
+                        url = "https://cdn.discordapp.com/attachments/1037800133947035788/1037825642768629820/Screenshot_20221102-214614_Google.jpg"
                     },
                     title = isDaily and "**Daily Reward Collected!**" or "**Dungeon Run Completed!**"
                 }
